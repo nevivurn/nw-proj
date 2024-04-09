@@ -126,7 +126,6 @@ enum conn_phase {
 	PHASE_READ_HEADERS,
 	PHASE_SEND_HEADERS,
 	PHASE_SEND_BODY,
-	PHASE_SEND_HEADERS_ONLY, // for errors
 	PHASE_CLOSE,
 };
 
@@ -210,6 +209,7 @@ usage:
 }
 
 int main(int argc, char *argv[]) {
+	// ignore SIGPIPE
 	sigaction(SIGPIPE, &(struct sigaction) { .sa_handler = SIG_IGN }, NULL);
 
 	if (!parse_args(argc, argv))
@@ -224,9 +224,9 @@ int main(int argc, char *argv[]) {
 	int sfd = listen_server();
 	if (sfd < 0)
 		return EXIT_FAILURE;
-
 	start_server(sfd);
 
+	close(sfd);
 	regfree(&preg_reqline);
 	regfree(&preg_headers);
 }
@@ -278,6 +278,7 @@ static int start_server(int sfd) {
 			}
 		}
 
+		// stop waiting for new connections if we're full
 		ev.events = s_state.cur_conns < MAX_CONNS ? EPOLLIN : 0;
 		if (epoll_ctl(efd, EPOLL_CTL_MOD, sfd, &ev) < 0) {
 			perror("epoll_ctl");
@@ -408,8 +409,7 @@ static int handle_conn(struct conn_state *conn) {
 
 		// writing states
 		case PHASE_SEND_HEADERS: // fallthrough
-		case PHASE_SEND_BODY: // fallthrough
-		case PHASE_SEND_HEADERS_ONLY:
+		case PHASE_SEND_BODY:
 			ev.events |= EPOLLOUT;
 			break;
 
@@ -499,8 +499,11 @@ static int advance_conn(struct conn_state *conn) {
 				conn->req_size -= size;
 			}
 
-			close(conn->req_fd);
-			conn->req_fd = -1;
+			// in case of errors, fd may be unset
+			if (conn->req_fd >= 0) {
+				close(conn->req_fd);
+				conn->req_fd = -1;
+			}
 
 			if (conn->close) {
 				conn->phase = PHASE_CLOSE;
@@ -510,15 +513,6 @@ static int advance_conn(struct conn_state *conn) {
 			conn->phase = PHASE_NEW;
 			break;
 
-		case PHASE_SEND_HEADERS_ONLY:
-			if (!bf_writeall_to(conn->wbuf, conn->conn_fd)) {
-				if (errno == EAGAIN || errno == EWOULDBLOCK)
-					return 0;
-				perror("bf_writeall_to");
-			}
-			conn->phase = PHASE_CLOSE;
-			return 0;
-
 		case PHASE_CLOSE:
 			// not a real phase
 			return 0;
@@ -527,7 +521,8 @@ static int advance_conn(struct conn_state *conn) {
 	return 1;
 
 badRequest:
-	conn->phase = PHASE_SEND_HEADERS_ONLY;
+	conn->phase = PHASE_SEND_HEADERS;
+	conn->req_size = 0;
 	conn->close = 1;
 	bf_reset(conn->wbuf);
 	bf_printf(conn->wbuf, "%s", http400);
@@ -596,7 +591,8 @@ static int end_headers(struct conn_state *conn) {
 	if (fd < 0) {
 		perror("open");
 		if (errno == ENOENT) {
-			conn->phase = PHASE_SEND_HEADERS_ONLY;
+			conn->phase = PHASE_SEND_HEADERS;
+			conn->req_size = 0;
 			conn->close = 1;
 			bf_reset(conn->wbuf);
 			bf_printf(conn->wbuf, "%s", http404);
@@ -641,7 +637,8 @@ internalError:
 	if (fd >= 0)
 		close(fd);
 
-	conn->phase = PHASE_SEND_HEADERS_ONLY;
+	conn->phase = PHASE_SEND_HEADERS;
+	conn->req_size = 0;
 	conn->close = 1;
 	bf_reset(conn->wbuf);
 	bf_printf(conn->wbuf, "%s", http500);
