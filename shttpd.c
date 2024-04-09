@@ -31,6 +31,7 @@ typedef struct buffer {
 
 #define bf_size(buf) ((buf)->wp - (buf)->rp)
 #define bf_space(buf) ((buf)->cap - (buf)->wp)
+#define bf_fspace(buf) ((buf)->cap - bf_size(buf))
 #define bf_reset(buf) ((buf)->rp = (buf)->wp = 0)
 
 void _bf_pack(Buffer *buf) {
@@ -40,7 +41,7 @@ void _bf_pack(Buffer *buf) {
 }
 
 int _bf_readmore_into(Buffer *buf, int fd) {
-	if (bf_size(buf) - buf->cap > BF_BUFSIZE && bf_space(buf) < BF_BUFSIZE)
+	if (bf_fspace(buf) >= BF_BUFSIZE && bf_space(buf) < BF_BUFSIZE)
 		_bf_pack(buf);
 
 	ssize_t n = read(fd, &buf->data[buf->wp], MIN(bf_space(buf), BF_BUFSIZE));
@@ -67,7 +68,7 @@ Buffer *bf_new(size_t cap) {
 void *bf_readline_into(Buffer *buf, int fd, ssize_t *size) {
 	char *end;
 	while ((end = memmem(&buf->data[buf->rp], bf_size(buf), "\r\n", 2)) == NULL) {
-		if (bf_size(buf) == buf->cap) {
+		if (!bf_fspace(buf)) {
 			errno = ENOBUFS;
 			return NULL;
 		}
@@ -97,12 +98,12 @@ int bf_printf(Buffer *buf, const char *fmt, ...) {
 	va_start(ap, fmt);
 
 	size_t size = bf_space(buf);
-	int n = vsnprintf(&buf->data[buf->wp], size, fmt, ap);
-	if ((size_t) n >= size) {
+	size_t n = vsnprintf(&buf->data[buf->wp], size, fmt, ap);
+	if (n >= size && bf_fspace(buf) >= n) {
 		_bf_pack(buf);
 		size = bf_space(buf);
 		n = vsnprintf(&buf->data[buf->wp], size, fmt, ap);
-		if ((size_t) n >= size) {
+		if (n >= size) {
 			va_end(ap);
 			return 0;
 		}
@@ -117,6 +118,7 @@ int bf_printf(Buffer *buf, const char *fmt, ...) {
 
 #define LISTEN_BACKLOG 128
 #define MAX_EVENTS 128
+#define MAX_CONNS 128
 #define SEND_SIZE 4096
 
 enum conn_phase {
@@ -130,10 +132,10 @@ enum conn_phase {
 
 struct conn_state {
 	int efd;
+	int conn_fd;
+	// other fields not populated if conn_fd == sfd
 
 	enum conn_phase phase;
-
-	int conn_fd;
 	Buffer *rbuf, *wbuf;
 
 	int host_seen;
@@ -144,11 +146,18 @@ struct conn_state {
 	size_t req_size;
 };
 
+struct server_state {
+	int efd;
+	int conn_fd;
+	int cur_conns;
+};
+
 static int start_server(int sfd);
 static int listen_server(void);
-static int accept_conns(int sfd, int efd);
+static int accept_conns(struct server_state *server);
 
 // handle a connection until error, completion, or i/o blocks
+// 0 on close, -1 on error
 static int handle_conn(struct conn_state *conn);
 // advance the connection
 static int advance_conn(struct conn_state *conn);
@@ -229,10 +238,17 @@ static int start_server(int sfd) {
 		return 0;
 	}
 
-	struct conn_state s_state = (struct conn_state) { .conn_fd = sfd };
+	struct server_state s_state = (struct server_state) {
+		.efd = efd,
+		.conn_fd = sfd,
+		.cur_conns = 0,
+	};
 	struct epoll_event ev = {
 		.events = EPOLLIN,
-		.data = { .ptr = &s_state },
+		.data = { .ptr = &(struct conn_state) {
+			.efd = efd,
+			.conn_fd = sfd,
+		}},
 	};
 	if (epoll_ctl(efd, EPOLL_CTL_ADD, sfd, &ev) < 0) {
 		perror("epoll_ctl");
@@ -241,7 +257,7 @@ static int start_server(int sfd) {
 
 	struct epoll_event events[MAX_EVENTS];
 	while (1) {
-		int nfd = epoll_wait(efd, events, MAX_EVENTS, 0);
+		int nfd = epoll_wait(efd, events, MAX_EVENTS, -1);
 		if (nfd < 0) {
 			perror("epoll_wait");
 			return 0;
@@ -249,10 +265,23 @@ static int start_server(int sfd) {
 		for (int i = 0; i < nfd; i++) {
 			struct conn_state *conn = events[i].data.ptr;
 			if (conn->conn_fd == sfd) {
-				if (!accept_conns(sfd, efd))
+				if (!accept_conns(&s_state))
 					return 0;
-			} else if (!handle_conn(conn))
-				return 0;
+			} else {
+				int res = handle_conn(conn);
+				if (res < 0)
+					return 0;
+				if (!res) {
+					s_state.cur_conns--;
+					free(conn);
+				}
+			}
+		}
+
+		ev.events = s_state.cur_conns < MAX_CONNS ? EPOLLIN : 0;
+		if (epoll_ctl(efd, EPOLL_CTL_MOD, sfd, &ev) < 0) {
+			perror("epoll_ctl");
+			return 0;
 		}
 	}
 	return 1;
@@ -302,9 +331,9 @@ static int listen_server(void) {
 	return fd;
 }
 
-static int accept_conns(int sfd, int efd) {
-	while (1) {
-		int cfd = accept4(sfd, NULL, NULL, SOCK_NONBLOCK);
+static int accept_conns(struct server_state *server) {
+	while (server->cur_conns < MAX_CONNS) {
+		int cfd = accept4(server->conn_fd, NULL, NULL, SOCK_NONBLOCK);
 		if (cfd < 0) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				return 1;
@@ -320,9 +349,10 @@ static int accept_conns(int sfd, int efd) {
 		}
 
 		*conn = (struct conn_state) {
-			.efd = efd,
-			.phase = PHASE_NEW,
+			.efd = server->efd,
 			.conn_fd = cfd,
+
+			.phase = PHASE_NEW,
 			.rbuf = bf_new(BF_BUFSIZE),
 			.wbuf = bf_new(BF_BUFSIZE),
 
@@ -347,7 +377,7 @@ static int accept_conns(int sfd, int efd) {
 			.events = EPOLLIN | EPOLLONESHOT,
 			.data = { .ptr = conn },
 		};
-		if (epoll_ctl(efd, EPOLL_CTL_ADD, cfd, &ev) < 0) {
+		if (epoll_ctl(server->efd, EPOLL_CTL_ADD, cfd, &ev) < 0) {
 			perror("epoll_ctl");
 			free(conn->rbuf);
 			free(conn->wbuf);
@@ -355,8 +385,11 @@ static int accept_conns(int sfd, int efd) {
 			close(cfd);
 			return 0;
 		}
+
+		server->cur_conns++;
 	}
-	return 0;
+
+	return 1;
 }
 
 static int handle_conn(struct conn_state *conn) {
@@ -387,17 +420,19 @@ static int handle_conn(struct conn_state *conn) {
 			if (conn->req_fname)
 				free(conn->req_fname);
 			int res = epoll_ctl(conn->efd, EPOLL_CTL_DEL, conn->conn_fd, NULL);
+			free(conn->rbuf);
+			free(conn->wbuf);
 			close(conn->conn_fd);
 			if (res < 0) {
 				perror("epoll_ctl");
-				return 0;
+				return -1;
 			}
-			return 1;
+			return 0;
 	}
 
 	if (epoll_ctl(conn->efd, EPOLL_CTL_MOD, conn->conn_fd, &ev) < 0) {
 		perror("epoll_ctl");
-		return 0;
+		return -1;
 	}
 	return 1;
 }
@@ -559,6 +594,7 @@ static int end_headers(struct conn_state *conn) {
 	free(conn->req_fname);
 	conn->req_fname = NULL;
 	if (fd < 0) {
+		perror("open");
 		if (errno == ENOENT) {
 			conn->phase = PHASE_SEND_HEADERS_ONLY;
 			conn->close = 1;
