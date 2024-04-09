@@ -32,7 +32,6 @@ typedef struct buffer {
 #define bf_size(buf) ((buf)->wp - (buf)->rp)
 #define bf_space(buf) ((buf)->cap - (buf)->wp)
 #define bf_fspace(buf) ((buf)->cap - bf_size(buf))
-#define bf_reset(buf) ((buf)->rp = (buf)->wp = 0)
 
 void _bf_pack(Buffer *buf) {
 	memmove(buf->data, &buf->data[buf->rp], bf_size(buf));
@@ -61,7 +60,7 @@ Buffer *bf_new(size_t cap) {
 	if (!buf)
 		return NULL;
 	buf->cap = cap;
-	bf_reset(buf);
+	buf->rp = buf->wp = 0;
 	return buf;
 }
 
@@ -526,7 +525,6 @@ badRequest:
 	conn->phase = PHASE_SEND_HEADERS;
 	conn->req_size = 0;
 	conn->close = 1;
-	bf_reset(conn->wbuf);
 	bf_printf(conn->wbuf, "%s", http400);
 	return 1;
 }
@@ -596,7 +594,6 @@ static int end_headers(struct conn_state *conn) {
 			conn->phase = PHASE_SEND_HEADERS;
 			conn->req_size = 0;
 			conn->close = 1;
-			bf_reset(conn->wbuf);
 			bf_printf(conn->wbuf, "%s", http404);
 			return 1;
 		}
@@ -642,7 +639,6 @@ internalError:
 	conn->phase = PHASE_SEND_HEADERS;
 	conn->req_size = 0;
 	conn->close = 1;
-	bf_reset(conn->wbuf);
 	bf_printf(conn->wbuf, "%s", http500);
 	return 1; // we'd return 400 otherwise
 }
