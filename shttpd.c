@@ -364,7 +364,7 @@ static int accept_conns(struct server_state *server) {
 			.req_size = 0,
 		};
 		if (!conn->rbuf || !conn->wbuf) {
-			perror("malloc");
+			perror("bf_new");
 			if (conn->rbuf)
 				free(conn->rbuf);
 			if (conn->wbuf)
@@ -375,7 +375,7 @@ static int accept_conns(struct server_state *server) {
 		}
 
 		struct epoll_event ev = {
-			.events = EPOLLIN | EPOLLONESHOT,
+			.events = EPOLLIN,
 			.data = { .ptr = conn },
 		};
 		if (epoll_ctl(server->efd, EPOLL_CTL_ADD, cfd, &ev) < 0) {
@@ -397,7 +397,7 @@ static int handle_conn(struct conn_state *conn) {
 	while (advance_conn(conn));
 
 	struct epoll_event ev = (struct epoll_event) {
-		.events = EPOLLONESHOT,
+		.events = 0,
 		.data = { .ptr = conn },
 	};
 	switch (conn->phase) {
@@ -419,9 +419,9 @@ static int handle_conn(struct conn_state *conn) {
 				close(conn->req_fd);
 			if (conn->req_fname)
 				free(conn->req_fname);
-			int res = epoll_ctl(conn->efd, EPOLL_CTL_DEL, conn->conn_fd, NULL);
 			free(conn->rbuf);
 			free(conn->wbuf);
+			int res = epoll_ctl(conn->efd, EPOLL_CTL_DEL, conn->conn_fd, NULL);
 			close(conn->conn_fd);
 			if (res < 0) {
 				perror("epoll_ctl");
