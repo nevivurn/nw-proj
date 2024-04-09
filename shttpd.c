@@ -41,7 +41,7 @@ void _bf_pack(Buffer *buf) {
 }
 
 int _bf_readmore_into(Buffer *buf, int fd) {
-	if (bf_fspace(buf) >= BF_BUFSIZE && bf_space(buf) < BF_BUFSIZE)
+	if (bf_fspace(buf) && !bf_space(buf))
 		_bf_pack(buf);
 
 	ssize_t n = read(fd, &buf->data[buf->wp], MIN(bf_space(buf), BF_BUFSIZE));
@@ -259,6 +259,8 @@ static int start_server(int sfd) {
 	while (1) {
 		int nfd = epoll_wait(efd, events, MAX_EVENTS, -1);
 		if (nfd < 0) {
+			if (errno == EINTR)
+				continue;
 			perror("epoll_wait");
 			return 0;
 		}
