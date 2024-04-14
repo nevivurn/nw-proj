@@ -1,24 +1,23 @@
-{ stdenv }:
+{ stdenv, pandoc, texliveSmall, go_1_22 }:
 
 stdenv.mkDerivation (finalAttrs: {
-  name = "nw-proj1";
+  name = "nw-proj2";
   src = ./.;
 
-  #nativeBuildInputs = [ pandoc texliveSmall ];
-  #nativeCheckInputs = [ go_1_22 ];
+  nativeBuildInputs = [ pandoc texliveSmall ];
+  nativeCheckInputs = [ go_1_22 ];
 
-  enableParallelBuilding = true;
-
-  #doCheck = true;
-  #checkPhase = ''
-  #  runHook preCheck
-  #  GOCACHE=$(mktemp -d) make check
-  #  runHook postCheck
-  #'';
+  doCheck = true;
+  enableParallelChecking = true;
+  preCheck = ''
+    export GOCACHE=$(mktemp -d)
+  '';
 
   installPhase = ''
     runHook preInstall
-    install -Dm755 sserver $out/bin/sserver
+    install -Dm755 shttpd $out/bin/shttpd
     runHook postInstall
   '';
+
+  meta.mainProgram = "shttpd";
 })

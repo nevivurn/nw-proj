@@ -3,10 +3,9 @@
     flake-utils.lib.eachDefaultSystem (system:
       let pkgs = nixpkgs.legacyPackages.${system};
       in {
-        packages.default = pkgs.callPackage ./default.nix { };
-        devShells.default = pkgs.mkShell {
-          inputsFrom = [ self.packages.${system}.default ];
-          nativeBuildInputs = [ pkgs.valgrind pkgs.gdb ];
+        packages.default = pkgs.callPackage ./. { };
+        devShells.default = pkgs.callPackage ./shell.nix {
+          nw-proj = self.packages.${system}.default;
         };
       });
 }

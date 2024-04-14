@@ -169,10 +169,24 @@ static const char http400[] = "HTTP/1.0 400 Bad Request\r\nConnection: close\r\n
 static const char http404[] = "HTTP/1.0 404 Not Found\r\nConnection: close\r\n\r\n";
 static const char http500[] = "HTTP/1.0 500 Internal Server Error\r\nConnection: close\r\n\r\n";
 
-// regex for parsing
+// parsing regex patterns
 // TODO: spaces in uri? urlencoding?
-static const char pat_reqline[] = "^GET[[:space:]]+(/.*)[[:space:]]+HTTP/1\\.(0|1)[[:space:]]*\r\n$";
-static const char pat_headers[] = "^([^:]+):[[:space:]]*(.*)\r\n$";
+#define SPACE "[[:space:]]"
+#define NOSPACE "[^[:space:]]"
+
+static const char pat_reqline[] =
+	"^GET" SPACE "+"        // method
+	"(" "/" NOSPACE "*" ")" // uri
+	SPACE "+"
+	"HTTP/1\\.(0|1)"        // version
+	SPACE "*" "\r\n$";      // crlf
+
+static const char pat_headers[] =
+	"^" "(" NOSPACE "+" ")" // key
+	SPACE "*" ":" SPACE "*" // colon
+	"(" NOSPACE "+" ")"     // value
+	SPACE "*" "\r\n$";      // crlf
+
 static regex_t preg_reqline, preg_headers;
 
 static char *g_port;
@@ -488,7 +502,7 @@ static int advance_conn(struct conn_state *conn) {
 			break;
 
 		case PHASE_SEND_BODY:
-			while (conn->req_size) {
+			if (conn->req_size) {
 				size = sendfile(conn->conn_fd, conn->req_fd, NULL, MIN(conn->req_size, SEND_SIZE));
 				if (size < 0) {
 					if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -498,6 +512,10 @@ static int advance_conn(struct conn_state *conn) {
 					return 0;
 				}
 				conn->req_size -= size;
+
+				// let other clients advance to avoid starvation
+				if (conn->req_size)
+					return 0;
 			}
 
 			// in case of errors, fd may be unset
