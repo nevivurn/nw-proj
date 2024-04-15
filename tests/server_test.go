@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -338,7 +339,7 @@ func TestSimple(t *testing.T) {
 	}
 }
 
-func TestConcurrent(t *testing.T) {
+func TestMultiple(t *testing.T) {
 	c, setDeadline := dialServer(t)
 
 	c.WriteString(reqLines("GET /1 HTTP/1.1", "Host: localhost"))
@@ -359,6 +360,31 @@ func TestConcurrent(t *testing.T) {
 	expectResponse(t, c.Reader, http.StatusOK, true, strings.NewReader("5"), setDeadline)
 	expectResponse(t, c.Reader, http.StatusOK, false, strings.NewReader("Hello, World!"), setDeadline)
 	expectClose(t, c.Reader)
+}
+
+func TestConcurrent(t *testing.T) {
+	clients := make([]*bufio.ReadWriter, 5)
+
+	// open in order
+	for i := range clients {
+		clients[i], _ = dialServer(t)
+	}
+
+	// request in reverse order
+	for i := range clients {
+		c := clients[len(clients)-1-i]
+
+		c.WriteString(reqLines(fmt.Sprintf("GET /%d HTTP/1.1", i+1), "Host: localhost"))
+
+		fErrCh := make(chan error, 1)
+		go func() { fErrCh <- c.Flush() }()
+
+		expectResponse(t, c.Reader, http.StatusOK, true, strings.NewReader(strconv.Itoa(i+1)), func() {})
+
+		if err := <-fErrCh; err != nil {
+			t.Fatalf("flush failed: %v", err)
+		}
+	}
 }
 
 func TestRoot(t *testing.T) {
