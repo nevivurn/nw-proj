@@ -1,14 +1,15 @@
-{ stdenv, pandoc, texliveSmall, go_1_22 }:
+{ stdenv, go_1_22 }:
 
 stdenv.mkDerivation (finalAttrs: {
   name = "nw-proj2";
   src = ./.;
 
-  nativeBuildInputs = [ pandoc texliveSmall ];
   nativeCheckInputs = [ go_1_22 ];
 
-  doCheck = true;
+  enableParallelBuilding = true;
   enableParallelChecking = true;
+
+  doCheck = true;
   preCheck = ''
     export GOCACHE=$(mktemp -d)
   '';

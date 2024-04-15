@@ -1,0 +1,37 @@
+# Project 2. Building Simple Web Server
+
+> Yongun Seong 2017-19937
+
+For this assignment, I implemented a single-threaded server that handles
+concurrent connections by using epoll and nonblocking I/O. In the main loop,
+inside `start_server`, I wait for file descriptors to become ready and handle
+each file descriptor accordingly.
+
+In the case of the server listening socket, I pass control to the `accept_conns`
+function, where, as its name suggests, I accept incoming connections. I take
+care to only accept up to `MAX_CONNS=128` concurrent connections to avoid
+running into file descriptor limits. For each accepted connection, I initialize
+a `conn_state` struct and add it to the epoll interest list.
+
+Similarly, I handle client connections in the aptly named `handle_conn`
+function. Here, I call `advance_conn` repeatedly, where I advance the client
+state (new, reading headers, writing headers, writing body). In particular, I
+exit the `advance_conn` loop after a `read(2)` or `write(2)` call returns
+`EWOULDBLOCK` or after a single `sendfile(2)` call while writing the response
+body. I added the second exit case to reduce the chances of starving other
+clients while the server is responding with a very large response body.
+
+My implementation, while I expect to meet the assignment specifications, still
+has a few known limitations.
+
+First, when the requested file is not a regular file as reported by `fstat(2)`
+and the `S_ISREG` macro, I respond with a "500 Internal Server Error" response.
+I return the same response for many other error cases, such as permission
+errors. Indeed, I only return non-500 non-success responses when the file is not
+found (`ENOENT`) or when the request itself is malformed.
+
+Second, I do not correctly handle request URIs. In particular, I assume the
+request URI contains no spaces and treat such request as malformed. I have also
+not tested my server with non-ASCII filenames, and I expect many bugs when my
+server receives such requests. Also importantly, I do not special-case requests
+such as "../../../../etc/passwd", which has security implications.
