@@ -51,7 +51,7 @@ func readResponse(t *testing.T, r *bufio.Reader) *http.Response {
 }
 
 func expectReaderEqual(t *testing.T, got, want io.Reader, setDeadline func()) {
-	buf := make([]byte, 4096)
+	buf := make([]byte, 1<<20)
 	cmpBuf := make([]byte, len(buf))
 
 	for {

@@ -118,7 +118,7 @@ int bf_printf(Buffer *buf, const char *fmt, ...) {
 #define LISTEN_BACKLOG 128
 #define MAX_EVENTS 128
 #define MAX_CONNS 128
-#define SEND_SIZE 4096
+#define SEND_SIZE (1<<20)
 
 enum conn_phase {
 	PHASE_NEW,
