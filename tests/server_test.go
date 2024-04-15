@@ -362,6 +362,21 @@ func TestMultiple(t *testing.T) {
 	expectClose(t, c.Reader)
 }
 
+func TestStream(t *testing.T) {
+	c, setDeadline := dialServer(t)
+
+	go func() {
+		for i := 0; i < 1000; i++ {
+			c.WriteString(reqLines("GET /hello HTTP/1.1", "Host: localhost"))
+		}
+		c.Flush()
+	}()
+
+	for i := 0; i < 1000; i++ {
+		expectResponse(t, c.Reader, http.StatusOK, true, strings.NewReader("Hello, World!"), setDeadline)
+	}
+}
+
 func TestConcurrent(t *testing.T) {
 	clients := make([]*bufio.ReadWriter, 5)
 
