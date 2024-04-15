@@ -35,3 +35,11 @@ request URI contains no spaces and treat such request as malformed. I have also
 not tested my server with non-ASCII filenames, and I expect many bugs when my
 server receives such requests. Also importantly, I do not special-case requests
 such as "../../../../etc/passwd", which has security implications.
+
+I tested this code by writing a Go test harness, which I used to extensively
+test edge cases, including various forms of malformed requests and concurrent
+clients. While writing and running these tests, I discovered many bugs in my
+implementation, which I immediately remediated.
+
+While working on these test cases, I collaborated with Minhyeok Jeon
+(2018-10727).
