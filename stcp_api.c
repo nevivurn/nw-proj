@@ -321,7 +321,7 @@ void stcp_app_send(mysocket_t sd, const void *src, size_t src_len)
     assert(ctx && src);
     if (src_len > 0)
     {
-        DEBUG_LOG(("stcp_app_send(%d):  sending %u bytes up to app\n",
+        DEBUG_LOG(("stcp_app_send(%d):  sending %zu bytes up to app\n",
                    sd, src_len));
         _mysock_enqueue_buffer(ctx, &ctx->app_send_queue, src, src_len);
     }

@@ -155,7 +155,7 @@ loop_until_end(int sd)
 
             /* Remove trailing spaces and add CRLF at the end */
             pline = line + strlen(line) - 1;
-            while ((pline > line - 1) && isspace((int) (*pline)))
+            while ((pline >= line) && isspace((int) (*pline)))
                 --pline;
 
             if (pline <= line)

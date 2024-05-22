@@ -49,7 +49,7 @@ typedef struct
 
 #ifdef __GNUC__
 #define DEBUG_PEER(ctx) \
-    DEBUG_LOG(("%s peer:  %s:%d\n", __FUNCTION__, \
+    DEBUG_LOG(("%s peer:  %s:%d\n", __func__, \
               inet_ntoa(((struct sockaddr_in *) &ctx->peer_addr)->sin_addr), \
               (int) ntohs(((struct sockaddr_in *) &ctx->peer_addr)->sin_port)))
 #else

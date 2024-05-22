@@ -108,7 +108,7 @@ typedef struct tcphdr
         }
 #else
     #ifdef __GNUC__
-        #define dprintf(fmt, ...)
+        #define dprintf(...)
         #define dperror(head)
     #else
         #define dprintf (void)

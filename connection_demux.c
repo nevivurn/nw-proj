@@ -62,7 +62,7 @@ typedef struct
  * there is one entry in listen_table per passive (listening) socket.
  */
 HASH_TABLE_DECLARE(listen_table, mysocket_t, listen_queue_t *,
-                   MAX_NUM_CONNECTIONS);
+                   MAX_NUM_CONNECTIONS)
 static pthread_rwlock_t listen_lock; /* XXX: see notes in network_io_vns.c */
 
 static listen_queue_t *_get_connection_queue(mysock_context_t *ctx);

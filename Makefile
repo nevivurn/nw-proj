@@ -14,7 +14,7 @@ include ENVCFG.MK
 
 CC=gcc
 CFLAGS=-g -D$(ENV) -D_REENTRANT $(ENVCFLAGS) -Wall -W -Wno-unused-function \
-       -Wno-unused-parameter #-DDEBUG
+       -Wno-unused-parameter -Wextra -Wpedantic --std=c11 #-DDEBUG
 LIBS=$(ENVLIBS)
 MAKEFILE=Makefile
 LN=ln

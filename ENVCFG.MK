@@ -33,7 +33,7 @@ else
 ifeq ($(strip $(ENV)),LINUX)
 # Linux settings
 ENVCFLAGS= -pthread -D_GNU_SOURCE
-ENVLIBS=-lnsl -lpthread -lcrypt
+ENVLIBS=-lpthread
 KILLALL=killall
 else
 # Solaris settings

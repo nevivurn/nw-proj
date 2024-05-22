@@ -6,8 +6,6 @@ stdenv.mkDerivation (finalAttrs: {
 
   enableParallelBuilding = true;
 
-  buildInputs = [ libnsl libxcrypt ];
-
   installPhase = ''
     runHook preInstall
     install -Dm755 -t $out/bin client server
