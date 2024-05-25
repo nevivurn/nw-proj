@@ -1,11 +1,11 @@
 /*
- * transport.c 
+ * transport.c
  *
  * CS244a HW#3 (Reliable Transport)
  *
  * This file implements the STCP layer that sits between the
  * mysocket and network layers. You are required to fill in the STCP
- * functionality in this file. 
+ * functionality in this file.
  *
  */
 
@@ -112,7 +112,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
 /* our_dprintf
  *
  * Send a formatted message to stdout.
- * 
+ *
  * format               A printf-style format string.
  *
  * This function is equivalent to a printf, but may be
