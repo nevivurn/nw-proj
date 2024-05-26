@@ -37,9 +37,16 @@ enum {
 
 typedef struct stcp_segment {
     struct stcp_segment *next;
+
+    // retransmit
+    struct timespec timeout;
+    int trans_count;
+
+    // header
     tcp_seq seq;
     tcp_seq ack; // only significant on recv, automatically set on send
     uint8_t flags;
+
     ssize_t len;
     char data[];
 } STCPSegment;
@@ -111,7 +118,7 @@ static int enqueue(STCPSegment **queue, STCPSegment *seg)
         queue = &(*queue)->next;
     if (*queue && (*queue)->seq == seg->seq && segment_len(seg) <= segment_len(*queue))
         // duplicate
-        // TODO: timers?
+        // TODO: timers? coalesce?
         return 0;
     seg->next = *queue;
     *queue = seg;
@@ -129,6 +136,11 @@ static void free_list(STCPSegment *queue) {
 static void send_segment(mysocket_t sd, context_t *ctx, STCPSegment *seg)
 {
     seg->ack = ctx->rcv_nxt;
+
+    clock_gettime(CLOCK_REALTIME, &seg->timeout);
+
+    seg->timeout.tv_sec += 1; // TODO: RTT
+    seg->trans_count++;
 
     dprintf("SEND ");
     segment_dump(seg);
@@ -178,7 +190,7 @@ static STCPSegment *recv_segment(mysocket_t sd, context_t *ctx)
 static void process_ack(context_t *ctx, tcp_seq ack)
 {
     if (!seq_in(ack, ctx->snd_una, ctx->snd_nxt))
-        // TODO: weird ack?
+        // weird ACK, ignore
         return;
 
     // acceptable ack, advance window
@@ -312,8 +324,24 @@ void transport_init(mysocket_t sd, bool_t is_active)
     }
 
     while (1) {
-        unsigned int event = stcp_wait_for_event(sd, NETWORK_DATA, NULL);
-        // TODO: handle TIMEOUT
+        struct timespec *timeout = NULL;
+        if (ctx->send_queue)
+            timeout = &ctx->send_queue->timeout;
+
+        unsigned int event = stcp_wait_for_event(sd, NETWORK_DATA, timeout);
+
+        if (!event) {
+            // retransmit
+            STCPSegment *seg = ctx->send_queue;
+            while (seg) {
+                if (seg->trans_count >= 6) {
+                    errno = is_active ? ECONNREFUSED : ECONNABORTED;
+                    goto cleanup;
+                }
+                send_segment(sd, ctx, seg);
+                seg = seg->next;
+            }
+        }
 
         STCPSegment *seg = recv_segment(sd, ctx);
         switch (ctx->connection_state) {
@@ -433,8 +461,24 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                 break;
         }
 
-        unsigned int event = stcp_wait_for_event(sd, event_mask, NULL);
-        // TODO: handle TIMEOUT
+        struct timespec *timeout = NULL;
+        if (ctx->send_queue)
+            timeout = &ctx->send_queue->timeout;
+
+        unsigned int event = stcp_wait_for_event(sd, event_mask, timeout);
+
+        if (!event) {
+            // retransmit
+            STCPSegment *seg = ctx->send_queue;
+            while (seg) {
+                if (seg->trans_count >= 6) {
+                    errno = EPIPE; // TODO: is this right?
+                    return;
+                }
+                send_segment(sd, ctx, seg);
+                seg = seg->next;
+            }
+        }
 
         if (event & APP_DATA) {
             size_t data_len = MIN(STCP_MSS, WINDOW_SIZE - (ctx->snd_nxt - ctx->snd_una));
