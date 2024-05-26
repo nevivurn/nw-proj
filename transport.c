@@ -28,7 +28,7 @@ enum {
     CSTATE_ESTABLISHED,
     CSTATE_FIN_WAIT_1,
     CSTATE_FIN_WAIT_2,
-    //CSTATE_CLOSING, // we do WAIT_1 -> WAIT_2 -> CLOSED instead
+    CSTATE_CLOSING,
     CSTATE_CLOSE_WAIT,
     CSTATE_LAST_ACK,
 };
@@ -84,8 +84,6 @@ static void segment_dump(STCPSegment *seg)
 /* this structure is global to a mysocket descriptor */
 typedef struct
 {
-    bool_t done; // 1 once connection is closed
-
     int connection_state; // state of the connection (established, etc.)
     tcp_seq initial_sequence_num;
 
@@ -196,7 +194,7 @@ static void process_ack(context_t *ctx, tcp_seq ack)
             // NOTE: FIN in FIN-ACK handled in process_data
             if (ctx->connection_state == CSTATE_FIN_WAIT_1)
                 ctx->connection_state = CSTATE_FIN_WAIT_2;
-            else if (ctx->connection_state == CSTATE_LAST_ACK)
+            else if (ctx->connection_state == CSTATE_LAST_ACK || ctx->connection_state == CSTATE_CLOSING)
                 ctx->connection_state = CSTATE_CLOSED;
         }
 
@@ -265,6 +263,9 @@ static void process_data(mysocket_t sd, context_t *ctx, STCPSegment *seg)
             if (ctx->connection_state == CSTATE_ESTABLISHED)
                 // passive close
                 ctx->connection_state = CSTATE_CLOSE_WAIT;
+            else if (ctx->connection_state == CSTATE_FIN_WAIT_1)
+                // simultaneous close
+                ctx->connection_state = CSTATE_CLOSING;
             else if (ctx->connection_state == CSTATE_FIN_WAIT_2)
                 // peer close in active close
                 ctx->connection_state = CSTATE_CLOSED;
@@ -310,9 +311,9 @@ void transport_init(mysocket_t sd, bool_t is_active)
         ctx->connection_state = CSTATE_LISTEN;
     }
 
-    while (!ctx->done && ctx->connection_state != CSTATE_ESTABLISHED) {
-        stcp_wait_for_event(sd, NETWORK_DATA, NULL);
-        // TODO: handle TIMEOUT, APP_CLOSE_REQUESTED
+    while (1) {
+        unsigned int event = stcp_wait_for_event(sd, NETWORK_DATA, NULL);
+        // TODO: handle TIMEOUT
 
         STCPSegment *seg = recv_segment(sd, ctx);
         switch (ctx->connection_state) {
@@ -320,8 +321,8 @@ void transport_init(mysocket_t sd, bool_t is_active)
                 // SYN
                 if (seg->flags != TH_SYN) {
                     free(seg);
-                    // we would have to respond with RST, which is not implemented
-                    goto cleanup;
+                    // ignore, no RST
+                    break;
                 }
 
                 ctx->rcv_nxt = seg->seq + 1; // seq + SYN
@@ -338,16 +339,16 @@ void transport_init(mysocket_t sd, bool_t is_active)
             case CSTATE_SYN_SENT:
                 // SYN-ACK
                 if (seg->flags != (TH_SYN | TH_ACK)) {
-                    // TODO: check, but we probably don't need to support simultaneous open or RST
                     free(seg);
-                    goto cleanup;
+                    // ignore, no simultaneous open, no RST
+                    break;
                 }
 
                 process_ack(ctx, seg->ack);
                 // did they ACK our syn?
                 if (ctx->snd_una != ctx->snd_nxt) {
-                    // weird ack
                     free(seg);
+                    // ignore, weird ACK
                     break;
                 }
 
@@ -360,31 +361,32 @@ void transport_init(mysocket_t sd, bool_t is_active)
                 seg->flags = TH_ACK;
                 send_segment(sd, ctx, seg);
                 ctx->connection_state = CSTATE_ESTABLISHED;
-                break;
+                goto unblock;
 
             case CSTATE_SYN_RECEIVED:
                 // ACK
-                if (seg->flags != TH_ACK) {
-                    // TODO: check
+                if (!(seg->flags & TH_ACK)) {
                     free(seg);
-                    goto cleanup;
+                    // ignore, they lost our SYN-ACK
+                    break;
                 }
 
                 process_ack(ctx, seg->ack);
                 // did they ACK our syn?
                 if (ctx->snd_una != ctx->snd_nxt) {
-                    // weird ack
                     free(seg);
+                    // ignore, weird ACK
                     break;
                 }
 
                 ctx->connection_state = CSTATE_ESTABLISHED;
-                // it's possible the final ACK includes data
+                // may already contain data, even FIN
                 process_data(sd, ctx, seg);
-                break;
+                goto unblock;
         }
     }
 
+unblock:
     stcp_unblock_application(sd);
     control_loop(sd, ctx);
 
@@ -417,7 +419,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
     // It's possible the window is closed before we can send the FIN
     int close_requested = 0;
 
-    while (!ctx->done) {
+    while (1) {
         unsigned int event_mask = ANY_EVENT;
         if (ctx->snd_nxt - ctx->snd_una >= WINDOW_SIZE)
             event_mask &= ~APP_DATA;
@@ -425,12 +427,14 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         switch (ctx->connection_state) {
             case CSTATE_FIN_WAIT_1:
             case CSTATE_FIN_WAIT_2:
+            case CSTATE_CLOSING:
                 // active close, we can't send any more data
                 event_mask &= ~APP_DATA;
                 break;
         }
 
         unsigned int event = stcp_wait_for_event(sd, event_mask, NULL);
+        // TODO: handle TIMEOUT
 
         if (event & APP_DATA) {
             size_t data_len = MIN(STCP_MSS, WINDOW_SIZE - (ctx->snd_nxt - ctx->snd_una));
@@ -470,7 +474,7 @@ static void control_loop(mysocket_t sd, context_t *ctx)
         }
 
         if (ctx->connection_state == CSTATE_CLOSED)
-            ctx->done = 1;
+            break;
     }
 }
 
