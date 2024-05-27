@@ -1,6 +1,6 @@
-{ mkShell, nw-proj, gdb, valgrind }:
+{ mkShell, pandoc, texliveSmall, nw-proj, gdb, valgrind }:
 
 mkShell {
   inputsFrom = [ nw-proj ];
-  nativeBuildInputs = [ gdb valgrind ];
+  nativeBuildInputs = [ gdb valgrind pandoc texliveSmall ];
 }

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 if [ ! $# -eq 2 ]; then
     echo "usage: $0 [student_id] [name]"
