@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <inttypes.h>
 #include "mysock.h"
 #include "stcp_api.h"
 #include "transport.h"
@@ -34,12 +35,16 @@ enum {
 };
 
 #define WINDOW_SIZE 3072
+// 0.1s ~ 10s
+#define INIT_RTO 1000000000
+#define MIN_RTO   100000000
+#define MAX_RTO 10000000000
 
 typedef struct stcp_segment {
     struct stcp_segment *next;
 
     // retransmit
-    struct timespec timeout;
+    struct timespec sent;
     int trans_count;
 
     // header
@@ -106,11 +111,33 @@ typedef struct
     // queues
     STCPSegment *send_queue;
     STCPSegment *recv_queue;
+
+    // rto state
+    int64_t srtt;
+    int64_t rttvar;
+    int64_t rto;
 } context_t;
 
 
 static void generate_initial_seq_num(context_t *ctx);
 static void control_loop(mysocket_t sd, context_t *ctx);
+
+// timespec arithmetic
+static int64_t ts_to_ns(struct timespec ts)
+{
+    return ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+static struct timespec ns_to_ts(int64_t ns)
+{
+    return (struct timespec) {
+        .tv_sec = ns / 1000000000,
+        .tv_nsec = ns % 1000000000,
+    };
+}
+static struct timespec timespec_add(struct timespec a, struct timespec b)
+{
+    return ns_to_ts(ts_to_ns(a) + ts_to_ns(b));
+}
 
 static int enqueue(STCPSegment **queue, STCPSegment *seg)
 {
@@ -137,9 +164,7 @@ static void send_segment(mysocket_t sd, context_t *ctx, STCPSegment *seg)
 {
     seg->ack = ctx->rcv_nxt;
 
-    clock_gettime(CLOCK_REALTIME, &seg->timeout);
-
-    seg->timeout.tv_sec += 1; // TODO: RTT
+    clock_gettime(CLOCK_REALTIME, &seg->sent);
     seg->trans_count++;
 
     dprintf("SEND ");
@@ -200,6 +225,26 @@ static void process_ack(context_t *ctx, tcp_seq ack)
         tcp_seq end = segment_end(ctx->send_queue);
         if (seq_in(end-1, ctx->snd_una, ctx->snd_nxt))
             break;
+
+        // RTO calculation
+        if (ctx->send_queue->trans_count == 1) {
+            struct timespec now;
+            clock_gettime(CLOCK_REALTIME, &now);
+            int64_t r = ts_to_ns(now) - ts_to_ns(ctx->send_queue->sent);
+
+            if (ctx->rto == 0) {
+                // first RTT
+                ctx->srtt = r;
+                ctx->rttvar = r / 2;
+                ctx->rto = ctx->srtt + MAX(1, 4 * ctx->rttvar);
+            } else {
+                ctx->rttvar = ctx->rttvar * 3/4 + llabs(ctx->srtt - r) / 4;
+                ctx->srtt = ctx->srtt * 7/8 + r / 8;
+                ctx->rto = ctx->srtt + MAX(1, 4 * ctx->rttvar);
+            }
+            ctx->rto = MAX(MIN_RTO, ctx->rto);
+            ctx->rto = MIN(MAX_RTO, ctx->rto);
+        }
 
         if (ctx->send_queue->flags & TH_FIN) {
             // our FIN was ACKed
@@ -324,14 +369,16 @@ void transport_init(mysocket_t sd, bool_t is_active)
     }
 
     while (1) {
-        struct timespec *timeout = NULL;
-        if (ctx->send_queue)
-            timeout = &ctx->send_queue->timeout;
-
-        unsigned int event = stcp_wait_for_event(sd, NETWORK_DATA, timeout);
+        struct timespec timeout, *tp = NULL;
+        if (ctx->send_queue) {
+            timeout = timespec_add(ctx->send_queue->sent, ns_to_ts(ctx->rto ? ctx->rto : INIT_RTO));
+            tp = &timeout;
+        }
+        unsigned int event = stcp_wait_for_event(sd, NETWORK_DATA, tp);
 
         if (!event) {
             // retransmit
+            ctx->rto = 2 * (ctx->rto ? ctx->rto : INIT_RTO);
             STCPSegment *seg = ctx->send_queue;
             while (seg) {
                 if (seg->trans_count >= 6) {
@@ -341,6 +388,7 @@ void transport_init(mysocket_t sd, bool_t is_active)
                 send_segment(sd, ctx, seg);
                 seg = seg->next;
             }
+            continue;
         }
 
         STCPSegment *seg = recv_segment(sd, ctx);
@@ -461,14 +509,16 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                 break;
         }
 
-        struct timespec *timeout = NULL;
-        if (ctx->send_queue)
-            timeout = &ctx->send_queue->timeout;
-
-        unsigned int event = stcp_wait_for_event(sd, event_mask, timeout);
+        struct timespec timeout, *tp = NULL;
+        if (ctx->send_queue) {
+            timeout = timespec_add(ctx->send_queue->sent, ns_to_ts(ctx->rto ? ctx->rto : INIT_RTO));
+            tp = &timeout;
+        }
+        unsigned int event = stcp_wait_for_event(sd, event_mask, tp);
 
         if (!event) {
             // retransmit
+            ctx->rto = 2 * (ctx->rto ? ctx->rto : INIT_RTO);
             STCPSegment *seg = ctx->send_queue;
             while (seg) {
                 if (seg->trans_count >= 6) {
