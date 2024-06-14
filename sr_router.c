@@ -267,39 +267,75 @@ void sr_handlepacket(struct sr_instance *sr,
 				if (i_hdr0->ip_ttl == 1)
 				{
 					/**************** fill in code here *****************/
+					ifc = sr_get_interface(sr, interface);
 
+					new_len = sizeof *e_hdr + sizeof *i_hdr + sizeof *ict11_hdr;
+					new_pck = malloc(new_len);
 
+					e_hdr = (struct sr_ethernet_hdr *) new_pck;
+					i_hdr = (struct sr_ip_hdr *) (new_pck + sizeof *e_hdr);
+					ict11_hdr = (struct sr_icmp_t11_hdr *) (new_pck + sizeof *e_hdr + sizeof *i_hdr);
 
+					memcpy(e_hdr->ether_shost, ifc->addr, ETHER_ADDR_LEN);
+					e_hdr->ether_type = htons(ethertype_ip);
 
+					i_hdr->ip_hl = sizeof *i_hdr / 4;
+					i_hdr->ip_v = 4;
+					i_hdr->ip_tos = 0;
+					i_hdr->ip_len = htons(sizeof *i_hdr + sizeof *ict11_hdr);
+					i_hdr->ip_id = i_hdr0->ip_id;
+					i_hdr->ip_off = htons(IP_DF);
+					i_hdr->ip_ttl = INIT_TTL;
+					i_hdr->ip_p = ip_protocol_icmp;
+					i_hdr->ip_src = ifc->ip;
+					i_hdr->ip_dst = i_hdr0->ip_src;
+					i_hdr->ip_sum = 0;
+					i_hdr->ip_sum = cksum(i_hdr, sizeof *i_hdr);
 
+					ict11_hdr->icmp_type = 11;
+					ict11_hdr->icmp_code = 0;
+					ict11_hdr->unused = 0;
+					memcpy(ict11_hdr->data, i_hdr0, ICMP_DATA_SIZE);
+					ict11_hdr->icmp_sum = 0;
+					ict11_hdr->icmp_sum = cksum(ict11_hdr, sizeof *ict11_hdr);
 
-
-
-
-
-
-
+					arpentry = sr_arpcache_lookup(&(sr->cache), i_hdr->ip_dst);
+					if (arpentry != NULL)
+					{
+						memcpy(e_hdr->ether_dhost, arpentry->mac, ETHER_ADDR_LEN);
+						free(arpentry);
+						sr_send_packet(sr, new_pck, new_len, interface);
+					}
+					else
+					{
+						arpreq = sr_arpcache_queuereq(&(sr->cache), i_hdr->ip_dst, new_pck, new_len, interface);
+						sr_arpcache_handle_arpreq(sr, arpreq);
+					}
 					/*****************************************************/
 					return;
 				}
 				/* TTL not expired */
 				else {
 					/**************** fill in code here *****************/
+					ifc = sr_get_interface(sr, rtentry->interface);
 
+					i_hdr0->ip_ttl--;
+					i_hdr0->ip_sum = 0;
+					i_hdr0->ip_sum = cksum(i_hdr0, sizeof(struct sr_ip_hdr));
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+					memcpy(e_hdr0->ether_shost, ifc->addr, ETHER_ADDR_LEN);
+					arpentry = sr_arpcache_lookup(&(sr->cache), i_hdr0->ip_dst);
+					if (arpentry != NULL)
+					{
+						memcpy(e_hdr0->ether_dhost, arpentry->mac, ETHER_ADDR_LEN);
+						free(arpentry);
+						sr_send_packet(sr, packet, len, rtentry->interface);
+					}
+					else
+					{
+						arpreq = sr_arpcache_queuereq(&(sr->cache), i_hdr0->ip_dst, packet, len, rtentry->interface);
+						sr_arpcache_handle_arpreq(sr, arpreq);
+					}
 					/*****************************************************/
 					return;
 				}
