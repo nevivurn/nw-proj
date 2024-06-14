@@ -66,7 +66,7 @@ int ip_black_list(struct sr_ip_hdr *iph)
 	char mask[20] = "255.255.255.0"; /* DO NOT MODIFY */
 	/**************** fill in code here *****************/
 
-
+	return 0;
 
 
 
@@ -348,21 +348,16 @@ void sr_handlepacket(struct sr_instance *sr,
 			if (a_hdr0->ar_op == htons(arp_op_request))
 			{
 				/**************** fill in code here *****************/
+				a_hdr0->ar_op = htons(arp_op_reply);
+				a_hdr0->ar_tip = a_hdr0->ar_sip;
+				a_hdr0->ar_sip = ifc->ip;
 
+				memcpy(e_hdr0->ether_dhost, e_hdr0->ether_shost, ETHER_ADDR_LEN);
+				memcpy(a_hdr0->ar_tha, a_hdr0->ar_sha, ETHER_ADDR_LEN);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+				memcpy(e_hdr0->ether_shost, ifc->addr, ETHER_ADDR_LEN);
+				memcpy(a_hdr0->ar_sha, ifc->addr, ETHER_ADDR_LEN);
+				sr_send_packet(sr, packet, len, interface);
 				/*****************************************************/
 				return;
 			}
@@ -371,23 +366,17 @@ void sr_handlepacket(struct sr_instance *sr,
 			else if (a_hdr0->ar_op == htons(arp_op_reply))
 			{
 				/**************** fill in code here *****************/
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+				arpreq = sr_arpcache_insert(&(sr->cache), a_hdr0->ar_sha, a_hdr0->ar_sip);
+				if (arpreq != NULL)
+				{
+					for (en_pck = arpreq->packets; en_pck != NULL; en_pck = en_pck->next)
+					{
+						e_hdr = (struct sr_ethernet_hdr *) en_pck->buf;
+						memcpy(e_hdr->ether_dhost, a_hdr0->ar_sha, ETHER_ADDR_LEN);
+						sr_send_packet(sr, en_pck->buf, en_pck->len, en_pck->iface);
+					}
+					sr_arpreq_destroy(&(sr->cache), arpreq);
+				}
 				/*****************************************************/
 			}
 

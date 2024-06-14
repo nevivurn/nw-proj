@@ -78,19 +78,34 @@ void sr_arpcache_handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req)
         else
         {
             /**************** fill in code here *****************/
+            /* send ARP request */
+            rtentry = sr_findLPMentry(sr->routing_table, req->ip);
+            ifc = sr_get_interface(sr, rtentry->interface);
 
+            len = sizeof *e_hdr + sizeof *a_hdr;
+            buf = malloc(len);
+            e_hdr = (struct sr_ethernet_hdr *) buf;
+            a_hdr = (struct sr_arp_hdr *) (buf + sizeof *e_hdr);
 
+            e_hdr->ether_type = htons(ethertype_arp);
+            memcpy(e_hdr->ether_shost, ifc->addr, ETHER_ADDR_LEN);
+            memset(e_hdr->ether_dhost, 0xff, ETHER_ADDR_LEN);
 
+            a_hdr->ar_hrd = htons(arp_hrd_ethernet);
+            a_hdr->ar_pro = htons(ethertype_ip);
+            a_hdr->ar_hln = ETHER_ADDR_LEN;
+            a_hdr->ar_pln = 4;
+            a_hdr->ar_op = htons(arp_op_request);
+            memcpy(a_hdr->ar_sha, ifc->addr, ETHER_ADDR_LEN);
+            a_hdr->ar_sip = ifc->ip;
+            memset(a_hdr->ar_tha, 0xff, ETHER_ADDR_LEN);
+            a_hdr->ar_tip = req->ip;
 
+            req->sent = curtime;
+            req->times_sent++;
 
-
-
-
-
-
-
-
-
+            sr_send_packet(sr, buf, len, ifc->name);
+            free(buf);
             /****************************************************/
         }
     }
